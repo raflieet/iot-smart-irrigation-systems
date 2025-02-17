@@ -1,5 +1,3 @@
-#include <ArduinoOTA.h>
-
 /*************************************************
 * Automated Irrigation Alpha Version
 *
@@ -9,7 +7,8 @@
 
 * Changelog:
 * 05-02-2025
-* added MQTT
+* MQTT added
+* saved to SD Card
 
 * Changelog:
 * 24-12-2024
@@ -25,6 +24,8 @@
 // Libraries
 #include "FS.h"
 #include "SPIFFS.h"
+#include "SD.h"
+#include "SPI.h"
 #include <WiFi.h>
 #include "time.h"
 #include <PubSubClient.h>
@@ -33,13 +34,10 @@
 // Pins
 #define FLOWMETER_PIN_1 34
 #define FLOWMETER_PIN_2 33
-#define ECHO_PIN 18
-#define TRIG_PIN 5
+#define ECHO_PIN 32
+#define TRIG_PIN 27
 #define RELAY_PIN_1 26
 #define RELAY_PIN_2 25
-
-// Activate SPIFFS
-#define FORMAT_SPIFFS_IF_FAILED true
 
 // Variables for WiFi connection
 const char* ssid = "Virus";
@@ -92,7 +90,8 @@ void IRAM_ATTR flow_2() {
 void connectWifi(); // Connect to WiFi
 void configureTime(); // Configure and retrieve real time
 void calculateFlow(); // Calculate flowrate and volume
-void saveData(); // Save measurement data to SPIFFS
+void saveDataSDCard(); // Save measurement data to SD Card
+void saveDataSPIFFS(); // Save measurement data to SPIFFS
 void readDistance(); // Measure distance with ultrasonic sensor
 void callback(char* topic, byte* message, unsigned int length);
 void reconnect();
@@ -103,16 +102,21 @@ void flowTask(void *param); // Task for flowrate calculation
 void setup() {
   Serial.begin(115200);
 
+  if (!SD.begin(5)) { 
+    Serial.println("SD Card Mount Failed");
+    return;
+  }
+  Serial.println("SD Card Mounted Successfully");
+
+  // Check SDCard
+  if (!checkSDCard()) {
+    return; 
+  }
+
   connectWifi(); // Connect to WiFi
   configureTime(); // Configure time
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
-
-
-  if (!SPIFFS.begin(FORMAT_SPIFFS_IF_FAILED)) {
-    Serial.println("SPIFFS Mount Failed");
-    return;
-  }
 
   // Set pin modes
   pinMode(TRIG_PIN, OUTPUT);
@@ -124,8 +128,6 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(FLOWMETER_PIN_1), flow_1, RISING);
   attachInterrupt(digitalPinToInterrupt(FLOWMETER_PIN_2), flow_2, RISING);
 
-
-
   // Create FreeRTOS tasks
   xTaskCreate(flowTask, "Flow Task", 4096, NULL, 1, NULL);
 }
@@ -135,6 +137,7 @@ void loop() {
   if (!client.connected()) {
     reconnect();
   }
+
   client.loop();
 
   configureTime(); // Configure time
@@ -169,7 +172,7 @@ void loop() {
     client.publish("sensor/data", jsonBuffer);
     Serial.print("Data Terkirim: ");
     Serial.println(jsonBuffer);
-    saveData();
+    saveDataSDCard();
   }
 
   delay(500);
@@ -180,14 +183,6 @@ void flowTask(void *param) {
   while (true) {
     calculateFlow();
     vTaskDelay(1000 / portTICK_PERIOD_MS); // Delay 1 second
-  }
-}
-
-// FreeRTOS task for data saving
-void spiffsTask(void *param) {
-  while (true) {
-    saveData();
-    vTaskDelay(60000 / portTICK_PERIOD_MS); // Delay 60 seconds
   }
 }
 
@@ -237,7 +232,7 @@ void calculateFlow() {
 }
 
 // Save data to SPIFFS
-void saveData() {
+void saveDataSPIFFS() {
 
   char time[20];
   strftime(time, sizeof(time), "%H:%M:%S", &timeinfo);
@@ -255,9 +250,59 @@ void saveData() {
   } else {
     Serial.println("Failed to open file for appending.");
   }
-  
-  
 }
+
+bool initSDCard(int csPin) {
+    if (!SD.begin(csPin)) {  // Pin CS untuk SD Card
+        Serial.println("SD Card Mount Failed");
+        return false;
+    }
+    Serial.println("SD Card Mounted Successfully");
+    return true;
+}
+
+bool checkSDCard() {
+    uint8_t cardType = SD.cardType();
+    if (cardType == CARD_NONE) {
+        Serial.println("No SD Card attached");
+        return false;
+    }
+
+    Serial.print("SD Card Type: ");
+    if (cardType == CARD_MMC) {
+        Serial.println("MMC");
+    } else if (cardType == CARD_SD) {
+        Serial.println("SDSC");
+    } else if (cardType == CARD_SDHC) {
+        Serial.println("SDHC");
+    } else {
+        Serial.println("UNKNOWN");
+    }
+    return true;
+}
+
+
+// Save data to SD Card
+void saveDataSDCard() {
+    char time[20];
+    strftime(time, sizeof(time), "%H:%M:%S", &timeinfo);
+
+    String data = String(time) + ";" + String(distance) + ";" + String(l_minute_1) + ";" +
+                  String(vol_1) + ";" + String(l_minute_2) + ";" + String(vol_2) + ";" +
+                  String(relayStatus) + "\n";
+
+    // Buka file di SD Card dalam mode append
+    File file = SD.open("/log.csv", FILE_APPEND);
+    if (file) {
+        file.print(data);
+        Serial.print("Data saved to SD Card: ");
+        Serial.println(data);
+        file.close();
+    } else {
+        Serial.println("Failed to open file for appending.");
+    }
+}
+
 
 // Connect to WiFi
 void connectWifi() {
