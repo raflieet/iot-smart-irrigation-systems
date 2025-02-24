@@ -1,60 +1,75 @@
+// Pin tempat sensor YF-B10 terhubung
+const int flowSensorPin = 34;
 
-volatile int flow_frequency; // Measures flow sensor pulses
+// Variabel untuk menyimpan jumlah pulsa
+volatile long pulseCount = 0;
 
-// Calculated litres/hour
-float vol = 0.0, l_minute;
-unsigned char flowsensor = 34; // Sensor Input
-unsigned long currentTime;
-unsigned long cloopTime;
-float volume_per_pulse = 0.0;
+// Variabel untuk menyimpan laju aliran (dalam liter per menit)
+float flowRate = 0.0;
 
-// Interrupt function
-void flow (){
-  flow_frequency++;
-}
+// Variabel untuk menyimpan total volume air yang telah mengalir
+float totalVolume = 0.0;
 
-// Setup Function
+// Faktor kalibrasi sensor (disesuaikan dengan datasheet sensor)
+float calibrationFactor = 8.83; // Contoh: 7.5 pulsa per liter per menit
+
+// Waktu terakhir pembacaan
+unsigned long oldTime = 0;
+
 void setup() {
+  // Inisialisasi serial monitor
   Serial.begin(115200);
 
-  pinMode(flowsensor, INPUT);
-  digitalWrite(flowsensor, HIGH); // Optional Internal Pull-Up
-  attachInterrupt(digitalPinToInterrupt(flowsensor), flow, RISING); // Setup Interrupt
-  currentTime = millis();
-  cloopTime = currentTime;
-  // Calibrate and set the value of volume_per_pulse here
-  volume_per_pulse = 0.004; // Replace with the actual value you've measured
+  // Set pin sensor sebagai input
+  pinMode(flowSensorPin, INPUT);
 
+  // Attach interrupt untuk menghitung pulsa
+  attachInterrupt(digitalPinToInterrupt(flowSensorPin), pulseCounter, FALLING);
 }
 
-// Loop Function
 void loop() {
-  currentTime = millis();
-  // Every second, calculate and print litres/hour
-  if (currentTime >= (cloopTime + 1000)){
-    Serial.println(currentTime);
-    cloopTime = currentTime; // Updates cloopTime
-    if (flow_frequency != 0){
-      // Pulse frequency (Hz) = 7.5Q, Q is flow rate in L/min.
-      //      l_minute = (flow_frequency / 7.5); // (Pulse frequency x 60 min) / 7.5Q = flowrate in L/hour
-      l_minute = (flow_frequency * volume_per_pulse * 60);
-      Serial.print("Rate: ");
-      Serial.print(l_minute);
-      Serial.println(" L/M");
+  // Dapatkan waktu saat ini
+  unsigned long currentTime = millis();
 
-      vol = vol + l_minute / 60;
-      Serial.print("Vol:");
-      Serial.print(vol);
-      Serial.println(" L, ");
-      Serial.print("Vol:");
-      Serial.print(vol * 1000);
-      Serial.println(" mL");
+  // Hitung selisih waktu sejak pembacaan terakhir
+  unsigned long elapsedTime = currentTime - oldTime;
 
-      flow_frequency = 0; // Reset Counter
-    }
-    else{
-      Serial.println("Rate:0 L/M ");
-    }
+  // Jika selisih waktu lebih dari 1 detik, hitung laju aliran
+  if (elapsedTime > 1000) {
+    Serial.println(elapsedTime);
+
+    // Non-aktifkan interrupt sementara
+    detachInterrupt(digitalPinToInterrupt(flowSensorPin));
+
+    // Hitung laju aliran (dalam liter per menit)
+    flowRate = ((1000.0 / elapsedTime) * pulseCount) / calibrationFactor;
+
+    // Hitung total volume air yang telah mengalir (dalam liter)
+    totalVolume += (flowRate / 60); // Konversi dari liter per menit ke liter per detik
+
+    // Tampilkan hasil ke serial monitor
+    Serial.print("Flow Rate: ");
+    Serial.print(flowRate);
+    Serial.print(" L/min");
+    Serial.print("  Total Volume: ");
+    Serial.print(totalVolume);
+    Serial.print(" L");
+    Serial.print("Pulse Count: ");
+    Serial.println(pulseCount);
+
+    // Reset pulse counter
+    pulseCount = 0;
+
+    // Simpan waktu saat ini sebagai waktu terakhir pembacaan
+    oldTime = currentTime;
+
+    // Aktifkan kembali interrupt
+    attachInterrupt(digitalPinToInterrupt(flowSensorPin), pulseCounter, FALLING);
   }
-  delay(10);
+}
+
+// Fungsi interrupt untuk menghitung pulsa
+void pulseCounter() {
+  pulseCount++;
+
 }
